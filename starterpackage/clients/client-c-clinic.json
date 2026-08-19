@@ -1,0 +1,15 @@
+{
+  "client": "client-c",
+  "record_type": "patient_referral",
+  "fields": [
+    { "name": "patient_name", "label": "Patient name", "type": "text", "required": true, "constraints": { "min_length": 1, "max_length": 120 } },
+    { "name": "national_id", "label": "National ID", "type": "text", "required": true, "constraints": { "pattern": "^[0-9]{9}$" }, "sensitivity": "confidential" },
+    { "name": "date_of_birth", "label": "Date of birth", "type": "date", "required": true },
+    { "name": "phone", "label": "Phone", "type": "text", "required": true, "constraints": { "pattern": "^\\+?[0-9()\\-\\s]{7,20}$" } },
+    { "name": "referring_physician", "label": "Referring physician", "type": "text", "required": true, "constraints": { "min_length": 1, "max_length": 120 } },
+    { "name": "physician_licence_number", "label": "Physician licence number", "type": "text", "required": true, "constraints": { "pattern": "^LIC-[0-9]{5}$" } },
+    { "name": "service_line", "label": "Service line", "type": "choice", "required": true, "options": ["cardiology", "orthopedics", "dermatology", "general", "other"] },
+    { "name": "priority_level", "label": "Priority level", "type": "choice", "required": true, "options": ["routine", "urgent"] },
+    { "name": "clinical_notes", "label": "Clinical notes", "type": "long_text", "required": false, "constraints": { "max_length": 4000 }, "sensitivity": "confidential" }
+  ]
+}

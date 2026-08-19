@@ -1,0 +1,13 @@
+{
+  "client": "client-a",
+  "record_type": "infrastructure_report",
+  "fields": [
+    { "name": "resident_name", "label": "Resident name", "type": "text", "required": true, "constraints": { "min_length": 1, "max_length": 120 } },
+    { "name": "resident_phone", "label": "Resident phone", "type": "text", "required": true, "constraints": { "pattern": "^\\+?[0-9()\\-\\s]{7,20}$" } },
+    { "name": "street_address", "label": "Street address", "type": "text", "required": true, "constraints": { "min_length": 1, "max_length": 200 } },
+    { "name": "district", "label": "District", "type": "choice", "required": true, "options": ["north", "south", "east", "west", "central"] },
+    { "name": "issue_type", "label": "Issue type", "type": "choice", "required": true, "options": ["pothole", "broken_streetlight", "overflowing_bin", "fallen_tree", "other"] },
+    { "name": "description", "label": "Description", "type": "long_text", "required": true, "constraints": { "max_length": 2000 } },
+    { "name": "photo", "label": "Photo", "type": "file", "required": false, "constraints": { "accepted": ["jpg", "jpeg", "png"] } }
+  ]
+}

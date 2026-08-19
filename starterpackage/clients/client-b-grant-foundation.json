@@ -1,0 +1,15 @@
+{
+  "client": "client-b",
+  "record_type": "grant_application",
+  "fields": [
+    { "name": "organisation_name", "label": "Organisation name", "type": "text", "required": true, "constraints": { "min_length": 1, "max_length": 200 } },
+    { "name": "registry_number", "label": "Registry number", "type": "text", "required": true, "constraints": { "pattern": "^RN-[0-9]{6}$" } },
+    { "name": "contact_person", "label": "Contact person", "type": "text", "required": true, "constraints": { "min_length": 1, "max_length": 120 } },
+    { "name": "requested_amount", "label": "Requested amount", "type": "number", "required": true, "constraints": { "min": 0 } },
+    { "name": "priority_areas", "label": "Priority areas", "type": "multi_choice", "required": true, "options": ["education", "health", "environment", "housing", "employment"], "constraints": { "min_selected": 1, "max_selected": 3 } },
+    { "name": "project_description", "label": "Project description", "type": "long_text", "required": true, "constraints": { "max_length": 3000 } },
+    { "name": "project_start_date", "label": "Project start date", "type": "date", "required": true },
+    { "name": "project_end_date", "label": "Project end date", "type": "date", "required": true },
+    { "name": "budget_file", "label": "Budget file", "type": "file", "required": true, "constraints": { "accepted": ["pdf", "xlsx"] } }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "benoz-platform-validation-starter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Starter package for the Benoz.AI take-home exercise: field validation library + test suite.",
+  "main": "lib/validate.js",
+  "scripts": {
+    "test": "node --test test/validate.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
