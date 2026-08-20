@@ -1,0 +1,1478 @@
+Claude Code · Opus 5 — Part 2: cross-field validation
+======================================================================
+
+❯ for part 2 add a add cross-field validation to the definition format and to   
+  the library, so a rule like “the project end date                             
+  must not be before the project start date” can be declared as data rather     
+  than written as code.                                                         
+
+● Now let me implement the actual Part 2 work. First, reading the library and
+  tests.
+
+● Bash(cd starterpackage && cat lib/validate.js)
+  ⎿  "use strict";
+
+     /**
+     … +169 lines (ctrl+o to expand)
+
+● Bash(cd starterpackage && cat test/validate.test.js)
+  ⎿  Error: Exit code 1
+     /usr/bin/bash: line 1: cd: starterpackage: No such file or directory
+
+● Bash(pwd && cat test/validate.test.js)
+  ⎿  /c/Users/richa/Downloads/benoz-ai-take-home-exercise/starterpackage
+     "use strict";
+     … +260 lines (ctrl+o to expand)
+
+  Read 2 files (ctrl+o to expand)
+
+● Now implementing the cross-field validation. First the library:
+
+  Read 2 files (ctrl+o to expand)
+● The heredoc choked on the file size/quoting; using Write for this one.
+
+● Write(starterpackage\lib\validate.js)
+  ⎿  Added 358 lines, removed 13 lines
+       3  /**
+       4   * Field-definition-driven record validator.
+       5   *
+       6 - * A "definition" is: { fields: [ { name, label, type, required
+         -, options?, constraints? }, ... ] }                            
+       6 + * A "definition" is:                                          
+       7 + *   {                                                         
+       8 + *     fields: [ { name, label, type, required, options?, const
+         +raints? }, ... ],                                              
+       9 + *     rules?: [ { id, when?, assert, error }, ... ]          <
+         +- cross-field rules                                            
+      10 + *   }                                                         
+      11 + *                                                             
+      12   * A "record" is a plain object of { fieldName: value }.
+      13   *
+       9 - * validateRecord(definition, record) -> { valid: boolean, erro
+         -rs: [{ field, message }] }                                     
+      14 + *   validateRecord(definition, record) -> { valid, errors: [{ 
+         +field, message, rule? }] }                                     
+      15 + *   validateDefinition(definition)     -> { valid, errors: [{ 
+         +message, rule? }] }                                            
+      16   *
+      17 + * Validation runs in two phases:                              
+      18 + *   1. per-field   — type and constraints, one field at a time
+         +.                                                              
+      19 + *   2. cross-field — the declarative rules in `definition.rule
+         +s`.                                                            
+      20 + *                                                             
+      21 + * A rule runs only when every field it depends on came out of 
+         +phase 1 usable:                                                
+      22 + * present, and free of per-field errors. Otherwise the rule is
+         + skipped in                                                    
+      23 + * silence, because a rule cannot say anything true about a val
+         +ue that is                                                     
+      24 + * missing or already known to be malformed. See README.md for 
+         +the full spec.                                                 
+      25 + *                                                             
+      26   * This module is deliberately client-agnostic: it knows nothin
+          g about any
+      12 - * particular client's field names or business rules. It only k
+         -nows the                                                       
+      13 - * generic type/constraint vocabulary below.                   
+      27 + * particular client, its field names, or its business rules. I
+         +t only knows the                                               
+      28 + * generic type / constraint / operator vocabulary below.      
+      29   */
+      30  
+      31  function isPresent(value) {
+     ...
+      39    return field.label || field.name;
+      40  }
+      41  
+      42 +// ------------------------------------------------------------
+         +---------------                                                
+      43 +// Phase 1 — per-field validation                              
+      44 +// ------------------------------------------------------------
+         +---------------                                                
+      45 +                                                               
+      46  function validateText(field, value, errors) {
+      47    if (typeof value !== "string") {
+      48      errors.push({ field: field.name, message: `${fieldLabel(fie
+          ld)} must be a string` });
+     ...
+      157  };
+      158  
+      159  /**
+      141 - * Validate a record against a field definition list.         
+      142 - * Per-field validation only — no cross-field rules. See the R
+          -EADME for the                                                 
+      143 - * extension task that adds those.                            
+      160 + * How each field type behaves under the cross-field operators
+          +. This is what lets                                           
+      161 + * `validateDefinition` reject "compare this date against that
+          + number" before a                                             
+      162 + * definition is ever used, rather than at 2am on a Saturday. 
+      163   */
+      145 -function validateRecord(definition, record) {                 
+      164 +const TYPE_KINDS = {                                          
+      165 +  text: "string",                                             
+      166 +  long_text: "string",                                        
+      167 +  date: "string",                                             
+      168 +  choice: "string",                                           
+      169 +  number: "number",                                           
+      170 +  boolean: "boolean",                                         
+      171 +  multi_choice: "list",                                       
+      172 +  file: "object",                                             
+      173 +};                                                            
+      174 +                                                              
+      175 +// -----------------------------------------------------------
+          +----------------                                              
+      176 +// Phase 2 — cross-field rules                                
+      177 +// -----------------------------------------------------------
+          +----------------                                              
+      178 +                                                              
+      179 +/**                                                           
+      180 + * Raised when a condition cannot be evaluated as written: an 
+          +unknown operator, or                                          
+      181 + * operands that cannot be ordered against each other. These a
+          +re faults in the                                              
+      182 + * *definition*, not in the record, and `validateDefinition` c
+          +atches every one of                                           
+      183 + * them up front. If one still reaches `validateRecord` it is 
+          +surfaced loudly,                                              
+      184 + * never swallowed into a silent pass.                        
+      185 + */                                                           
+      186 +class RuleError extends Error {}                              
+      187 +                                                              
+      188 +function describeType(value) {                                
+      189 +  if (Array.isArray(value)) return "list";                    
+      190 +  if (value === null) return "null";                          
+      191 +  return typeof value;                                        
+      192 +}                                                             
+      193 +                                                              
+      194 +/**                                                           
+      195 + * Ordering for `lt`/`lte`/`gt`/`gte`. Numbers compare numeric
+          +ally; strings compare                                         
+      196 + * lexicographically, which is exactly right for the `YYYY-MM-
+          +DD` date format — a                                           
+      197 + * zero-padded ISO date sorts identically as text and as a cal
+          +endar date, so date                                           
+      198 + * comparison needs no parsing, no timezone, and no ambiguity 
+          +about what "before"                                           
+      199 + * means across a DST boundary.                               
+      200 + */                                                           
+      201 +function orderCompare(a, b) {                                 
+      202 +  if (typeof a === "number" && typeof b === "number") return a
+          + - b;                                                         
+      203 +  if (typeof a === "string" && typeof b === "string") return a
+          + < b ? -1 : a > b ? 1 : 0;                                    
+      204 +  throw new RuleError(`cannot order a ${describeType(a)} again
+          +st a ${describeType(b)}`);                                    
+      205 +}                                                             
+      206 +                                                              
+      207 +function asList(value, op) {                                  
+      208 +  if (!Array.isArray(value)) throw new RuleError(`"${op}" need
+          +s a list, got a ${describeType(value)}`);                     
+      209 +  return value;                                               
+      210 +}                                                             
+      211 +                                                              
+      212 +/** Operators taking one operand: either a literal `value` or 
+          +another field's value. */                                     
+      213 +const BINARY_OPS = {                                          
+      214 +  eq: (a, b) => a === b,                                      
+      215 +  neq: (a, b) => a !== b,                                     
+      216 +  lt: (a, b) => orderCompare(a, b) < 0,                       
+      217 +  lte: (a, b) => orderCompare(a, b) <= 0,                     
+      218 +  gt: (a, b) => orderCompare(a, b) > 0,                       
+      219 +  gte: (a, b) => orderCompare(a, b) >= 0,                     
+      220 +  in: (a, b) => asList(b, "in").includes(a),                  
+      221 +  not_in: (a, b) => !asList(b, "not_in").includes(a),         
+      222 +  contains: (a, b) => asList(a, "contains").includes(b),      
+      223 +  not_contains: (a, b) => !asList(a, "not_contains").includes(
+          +b),                                                           
+      224 +};                                                            
+      225 +                                                              
+      226 +/** Operators taking no operand: they ask only whether the fie
+          +ld was filled in. */                                          
+      227 +const UNARY_OPS = {                                           
+      228 +  present: (a) => isPresent(a),                               
+      229 +  absent: (a) => !isPresent(a),                               
+      230 +};                                                            
+      231 +                                                              
+      232 +const ORDER_OPS = new Set(["lt", "lte", "gt", "gte"]);        
+      233 +                                                              
+      234 +function has(object, key) {                                   
+      235 +  return Object.prototype.hasOwnProperty.call(object, key);   
+      236 +}                                                             
+      237 +                                                              
+      238 +function evaluateCondition(condition, record) {               
+      239 +  if (Array.isArray(condition.all_of)) return condition.all_of
+          +.every((c) => evaluateCondition(c, record));                  
+      240 +  if (Array.isArray(condition.any_of)) return condition.any_of
+          +.some((c) => evaluateCondition(c, record));                   
+      241 +                                                              
+      242 +  const value = record[condition.field];                      
+      243 +                                                              
+      244 +  if (has(UNARY_OPS, condition.op)) return UNARY_OPS[condition
+          +.op](value);                                                  
+      245 +                                                              
+      246 +  const operator = has(BINARY_OPS, condition.op) ? BINARY_OPS[
+          +condition.op] : null;                                         
+      247 +  if (!operator) throw new RuleError(`unknown operator "${cond
+          +ition.op}"`);                                                 
+      248 +                                                              
+      249 +  const operand = has(condition, "other_field") ? record[condi
+          +tion.other_field] : condition.value;                          
+      250 +  return operator(value, operand);                            
+      251 +}                                                             
+      252 +                                                              
+      253 +/**                                                           
+      254 + * Every field a condition reads, and whether it needs a real 
+          +value to be read.                                             
+      255 + * `present`/`absent` are *about* emptiness, so their subject 
+          +may legitimately be                                           
+      256 + * missing — that carve-out is what makes "required if" rules 
+          +expressible at all.                                           
+      257 + */                                                           
+      258 +function conditionDependencies(condition, out = []) {         
+      259 +  if (!condition || typeof condition !== "object") return out;
+      260 +  for (const key of ["all_of", "any_of"]) {                   
+      261 +    if (Array.isArray(condition[key])) {                      
+      262 +      for (const child of condition[key]) conditionDependencie
+          +s(child, out);                                                
+      263 +      return out;                                             
+      264 +    }                                                         
+      265 +  }                                                           
+      266 +  const unary = has(UNARY_OPS, condition.op);                 
+      267 +  if (typeof condition.field === "string") out.push({ name: co
+          +ndition.field, needsValue: !unary });                         
+      268 +  if (typeof condition.other_field === "string") out.push({ na
+          +me: condition.other_field, needsValue: true });               
+      269 +  return out;                                                 
+      270 +}                                                             
+      271 +                                                              
+      272 +/** The field a rule is *about* — the default target for its e
+          +rror. */                                                      
+      273 +function assertSubject(assertion) {                           
+      274 +  return assertion && typeof assertion.field === "string" ? as
+          +sertion.field : null;                                         
+      275 +}                                                             
+      276 +                                                              
+      277 +/**                                                           
+      278 + * Run every rule in the definition. Rules read phase 1's resu
+          +lts and the record,                                           
+      279 + * never each other's outcomes, so the result does not depend 
+          +on the order the                                              
+      280 + * rules happen to be declared in.                            
+      281 + */                                                           
+      282 +function runRules(definition, record, fieldErrors) {          
+      283    const errors = [];
+      284 +  const rules = (definition && definition.rules) || [];       
+      285 +  if (!Array.isArray(rules) || rules.length === 0) return erro
+          +rs;                                                           
+      286 +                                                              
+      287 +  const alreadyBroken = new Set(fieldErrors.map((e) => e.field
+          +));                                                           
+      288 +                                                              
+      289 +  for (const [index, rule] of rules.entries()) {              
+      290 +    const id = (rule && rule.id) || `rules[${index}]`;        
+      291 +    const target = (rule && rule.error && rule.error.field) ||
+          + assertSubject(rule && rule.assert);                          
+      292 +                                                              
+      293 +    if (!rule || !rule.assert || !target) {                   
+      294 +      // A malformed rule is a fault in the definition. Never 
+          +skip one silently:                                            
+      295 +      // that turns a broken rule into a rule that always pass
+          +es.                                                           
+      296 +      errors.push({ field: target || null, message: `Rule "${i
+          +d}" is malformed and could not be run`, rule: id });          
+      297 +      continue;                                               
+      298 +    }                                                         
+      299 +                                                              
+      300 +    const dependencies = conditionDependencies(rule.when).conc
+          +at(conditionDependencies(rule.assert));                       
+      301 +    const unusable = dependencies.some(                       
+      302 +      (d) => alreadyBroken.has(d.name) || (d.needsValue && !is
+          +Present(record[d.name])),                                     
+      303 +    );                                                        
+      304 +    if (unusable) continue;                                   
+      305 +                                                              
+      306 +    try {                                                     
+      307 +      if (rule.when && !evaluateCondition(rule.when, record)) 
+          +continue; // guard says the rule does not apply               
+      308 +      if (evaluateCondition(rule.assert, record)) continue; //
+          + rule satisfied                                               
+      309 +    } catch (err) {                                           
+      310 +      if (!(err instanceof RuleError)) throw err;             
+      311 +      errors.push({ field: target, message: `Rule "${id}" coul
+          +d not be evaluated: ${err.message}`, rule: id });             
+      312 +      continue;                                               
+      313 +    }                                                         
+      314 +                                                              
+      315 +    errors.push({                                             
+      316 +      field: target,                                          
+      317 +      message: (rule.error && rule.error.message) || `Rule "${
+          +id}" was not satisfied`,                                      
+      318 +      rule: id,                                               
+      319 +    });                                                       
+      320 +  }                                                           
+      321 +                                                              
+      322 +  return errors;                                              
+      323 +}                                                             
+      324 +                                                              
+      325 +// -----------------------------------------------------------
+          +----------------                                              
+      326 +// Public API                                                 
+      327 +// -----------------------------------------------------------
+          +----------------                                              
+      328 +                                                              
+      329 +/**                                                           
+      330 + * Validate a record against a field definition.              
+      331 + *                                                            
+      332 + * Phase 1 checks each field on its own. Phase 2 runs the cros
+          +s-field rules                                                 
+      333 + * against the fields phase 1 left usable.                    
+      334 + */                                                           
+      335 +function validateRecord(definition, record) {                 
+      336 +  const fieldErrors = [];                                     
+      337    const fields = (definition && definition.fields) || [];
+      338 +  const values = record || {};                                
+      339  
+      340    for (const field of fields) {
+      150 -    const value = record ? record[field.name] : undefined;    
+      341 +    const value = values[field.name];                         
+      342      const present = isPresent(value);
+      343  
+      344      if (!present) {
+      345        if (field.required) {
+      155 -        errors.push({ field: field.name, message: `${fieldLabe
+          -l(field)} is required` });                                    
+      346 +        fieldErrors.push({ field: field.name, message: `${fiel
+          +dLabel(field)} is required` });                               
+      347        }
+      348        continue; // optional and absent: nothing further to che
+           ck
+      349      }
+      350  
+      351      const validator = TYPE_VALIDATORS[field.type];
+      352      if (!validator) {
+      162 -      errors.push({ field: field.name, message: `Unknown field
+          - type "${field.type}" for ${fieldLabel(field)}` });           
+      353 +      fieldErrors.push({ field: field.name, message: `Unknown 
+          +field type "${field.type}" for ${fieldLabel(field)}` });      
+      354        continue;
+      355      }
+      356  
+      166 -    validator(field, value, errors);                          
+      357 +    validator(field, value, fieldErrors);                     
+      358    }
+      359  
+      360 +  const errors = fieldErrors.concat(runRules(definition, value
+          +s, fieldErrors));                                             
+      361    return { valid: errors.length === 0, errors };
+      362  }
+      363  
+      172 -module.exports = { validateRecord, TYPE_VALIDATORS };         
+      364 +/**                                                           
+      365 + * Check that a definition is coherent, without any record in 
+          +hand.                                                         
+      366 + *                                                            
+      367 + * Rules are data, and data has no compiler — so this is the c
+          +ompiler. Run it                                               
+      368 + * wherever definitions are authored or loaded, so that a typo
+          + in a field name is                                           
+      369 + * caught by the person writing the rule rather than by the pe
+          +rson filling in the                                           
+      370 + * form.                                                      
+      371 + */                                                           
+      372 +function validateDefinition(definition) {                     
+      373 +  const errors = [];                                          
+      374 +  const push = (message, rule) => errors.push(rule ? { rule, m
+          +essage } : { message });                                      
+      375 +                                                              
+      376 +  const fields = (definition && definition.fields) || [];     
+      377 +  const byName = new Map();                                   
+      378 +                                                              
+      379 +  for (const [index, field] of fields.entries()) {            
+      380 +    if (!field || typeof field.name !== "string" || field.name
+          + === "") {                                                    
+      381 +      push(`fields[${index}] has no name`);                   
+      382 +      continue;                                               
+      383 +    }                                                         
+      384 +    if (byName.has(field.name)) push(`Duplicate field name "${
+          +field.name}"`);                                               
+      385 +    if (!has(TYPE_VALIDATORS, field.type)) push(`Field "${fiel
+          +d.name}" has unknown type "${field.type}"`);                  
+      386 +    byName.set(field.name, field);                            
+      387 +  }                                                           
+      388 +                                                              
+      389 +  const rules = (definition && definition.rules) || [];       
+      390 +  if (!Array.isArray(rules)) {                                
+      391 +    push("`rules` must be a list");                           
+      392 +    return { valid: false, errors };                          
+      393 +  }                                                           
+      394 +                                                              
+      395 +  const seenIds = new Set();                                  
+      396 +  for (const [index, rule] of rules.entries()) {              
+      397 +    const id = (rule && rule.id) || `rules[${index}]`;        
+      398 +                                                              
+      399 +    if (!rule || typeof rule !== "object") {                  
+      400 +      push("Rule must be an object", id);                     
+      401 +      continue;                                               
+      402 +    }                                                         
+      403 +    if (typeof rule.id !== "string" || rule.id === "") push("R
+          +ule needs an `id`", id);                                      
+      404 +    else if (seenIds.has(rule.id)) push(`Duplicate rule id "${
+          +rule.id}"`, id);                                              
+      405 +    else seenIds.add(rule.id);                                
+      406 +                                                              
+      407 +    if (!rule.error || typeof rule.error.message !== "string" 
+          +|| rule.error.message === "") {                               
+      408 +      push("Rule needs an `error.message` — the sentence a per
+          +son will read", id);                                          
+      409 +    }                                                         
+      410 +                                                              
+      411 +    if (!rule.assert) {                                       
+      412 +      push("Rule needs an `assert` condition", id);           
+      413 +      continue;                                               
+      414 +    }                                                         
+      415 +                                                              
+      416 +    const target = (rule.error && rule.error.field) || assertS
+          +ubject(rule.assert);                                          
+      417 +    if (!target) {                                            
+      418 +      push("Rule needs an explicit `error.field`: its `assert`
+          + is a combinator, so there is no subject to default to", id); 
+      419 +    } else if (!byName.has(target)) {                         
+      420 +      push(`Rule reports its error against unknown field "${ta
+          +rget}"`, id);                                                 
+      421 +    }                                                         
+      422 +                                                              
+      423 +    if (rule.when) checkCondition(rule.when, "when", id, byNam
+          +e, push);                                                     
+      424 +    checkCondition(rule.assert, "assert", id, byName, push);  
+      425 +  }                                                           
+      426 +                                                              
+      427 +  return { valid: errors.length === 0, errors };              
+      428 +}                                                             
+      429 +                                                              
+      430 +function checkCondition(condition, slot, ruleId, byName, push)
+          + {                                                            
+      431 +  if (!condition || typeof condition !== "object" || Array.isA
+          +rray(condition)) {                                            
+      432 +    push(`\`${slot}\` must be a condition object`, ruleId);   
+      433 +    return;                                                   
+      434 +  }                                                           
+      435 +                                                              
+      436 +  for (const key of ["all_of", "any_of"]) {                   
+      437 +    if (has(condition, key)) {                                
+      438 +      if (!Array.isArray(condition[key]) || condition[key].len
+          +gth === 0) {                                                  
+      439 +        push(`\`${slot}.${key}\` must be a non-empty list of c
+          +onditions`, ruleId);                                          
+      440 +      } else {                                                
+      441 +        for (const child of condition[key]) checkCondition(chi
+          +ld, `${slot}.${key}`, ruleId, byName, push);                  
+      442 +      }                                                       
+      443 +      return;                                                 
+      444 +    }                                                         
+      445 +  }                                                           
+      446 +                                                              
+      447 +  const unary = has(UNARY_OPS, condition.op);                 
+      448 +  const binary = has(BINARY_OPS, condition.op);               
+      449 +  if (!unary && !binary) {                                    
+      450 +    push(`\`${slot}\` uses unknown operator "${condition.op}"`
+          +, ruleId);                                                    
+      451 +    return;                                                   
+      452 +  }                                                           
+      453 +                                                              
+      454 +  if (typeof condition.field !== "string") {                  
+      455 +    push(`\`${slot}\` needs a \`field\``, ruleId);            
+      456 +    return;                                                   
+      457 +  }                                                           
+      458 +  const subject = byName.get(condition.field);                
+      459 +  if (!subject) {                                             
+      460 +    push(`\`${slot}\` references unknown field "${condition.fi
+          +eld}"`, ruleId);                                              
+      461 +    return;                                                   
+      462 +  }                                                           
+      463 +                                                              
+      464 +  const hasValue = has(condition, "value");                   
+      465 +  const hasOther = has(condition, "other_field");             
+      466 +                                                              
+      467 +  if (unary) {                                                
+      468 +    if (hasValue || hasOther) push(`"${condition.op}" takes no
+          + operand — remove \`value\`/\`other_field\``, ruleId);        
+      469 +    return;                                                   
+      470 +  }                                                           
+      471 +  if (hasValue === hasOther) {                                
+      472 +    push(`"${condition.op}" needs exactly one of \`value\` or 
+          +\`other_field\``, ruleId);                                    
+      473 +    return;                                                   
+      474 +  }                                                           
+      475 +                                                              
+      476 +  let other = null;                                           
+      477 +  if (hasOther) {                                             
+      478 +    other = byName.get(condition.other_field);                
+      479 +    if (!other) {                                             
+      480 +      push(`\`${slot}\` references unknown field "${condition.
+          +other_field}"`, ruleId);                                      
+      481 +      return;                                                 
+      482 +    }                                                         
+      483 +  }                                                           
+      484 +                                                              
+      485 +  const subjectKind = TYPE_KINDS[subject.type];               
+      486 +                                                              
+      487 +  if (ORDER_OPS.has(condition.op)) {                          
+      488 +    if (subjectKind !== "number" && subjectKind !== "string") 
+          +{                                                             
+      489 +      push(`"${condition.op}" cannot order a ${subject.type} f
+          +ield ("${condition.field}")`, ruleId);                        
+      490 +    } else if (other && TYPE_KINDS[other.type] !== subjectKind
+          +) {                                                           
+      491 +      push(                                                   
+      492 +        `"${condition.op}" cannot compare ${subject.type} "${c
+          +ondition.field}" with ${other.type} "${condition.other_field}"
+          +`,                                                            
+      493 +        ruleId,                                               
+      494 +      );                                                      
+      495 +    } else if (hasValue && describeType(condition.value) !== s
+          +ubjectKind) {                                                 
+      496 +      push(                                                   
+      497 +        `"${condition.op}" cannot compare ${subject.type} "${c
+          +ondition.field}" with ${describeType(condition.value)}`,      
+      498 +        ruleId,                                               
+      499 +      );                                                      
+      500 +    }                                                         
+      501 +  }                                                           
+      502 +                                                              
+      503 +  if (condition.op === "contains" || condition.op === "not_con
+          +tains") {                                                     
+      504 +    if (subjectKind !== "list") {                             
+      505 +      push(`"${condition.op}" needs a multi_choice field, but 
+          +"${condition.field}" is ${subject.type}`, ruleId);            
+      506 +    }                                                         
+      507 +  }                                                           
+      508 +                                                              
+      509 +  if (condition.op === "in" || condition.op === "not_in") {   
+      510 +    if (hasValue && !Array.isArray(condition.value)) push(`"${
+          +condition.op}" needs \`value\` to be a list`, ruleId);        
+      511 +    if (other && TYPE_KINDS[other.type] !== "list") {         
+      512 +      push(`"${condition.op}" needs \`other_field\` to be a mu
+          +lti_choice field`, ruleId);                                   
+      513 +    }                                                         
+      514 +  }                                                           
+      515 +}                                                             
+      516 +                                                              
+      517 +module.exports = { validateRecord, validateDefinition, TYPE_VA
+          +LIDATORS };                                                   
+
+● Bash(npm test 2>&1 | tail -20)
+  ⎿    ...
+     # Subtest: client C: optional clinical_notes left out is fine
+     ok 15 - client C: optional clinical_notes left out is fine
+     … +17 lines (ctrl+o to expand)
+
+● All 16 existing tests still pass. Now the client B fixture rule:
+
+● Update(starterpackage\clients\client-b-grant-foundation.json)
+  ⎿  Added 10 lines
+      11      { "name": "project_start_date", "label": "Project start dat
+          e", "type": "date", "required": true },
+      12      { "name": "project_end_date", "label": "Project end date", 
+          "type": "date", "required": true },
+      13      { "name": "budget_file", "label": "Budget file", "type": "f
+          ile", "required": true, "constraints": { "accepted": ["pdf", "x
+          lsx"] } }
+      14 +  ],                                                           
+      15 +  "rules": [                                                   
+      16 +    {                                                          
+      17 +      "id": "end_date_not_before_start_date",                  
+      18 +      "assert": { "field": "project_end_date", "op": "gte", "ot
+         +her_field": "project_start_date" },                            
+      19 +      "error": {                                               
+      20 +        "field": "project_end_date",                           
+      21 +        "message": "Project end date must not be before the pro
+         +ject start date"                                               
+      22 +      }                                                        
+      23 +    }                                                          
+      24    ]
+      25  }
+
+● Now the tests for the new behavior:
+
+● Write(starterpackage\test\cross-field.test.js)
+  ⎿  Wrote 549 lines to starterpackage\test\cross-field.test.js
+      1 "use strict";
+      2 
+      3 /**
+      4  * Cross-field rule tests.
+      5  *
+        and still passes.
+      7  * Everything here is new behavior: the `rules` block, the skip s
+        emantics for
+      8  * missing and invalid dependencies, and the definition checker.
+      9  */
+     … +657 lines (ctrl+o to expand)
+
+● Bash(node --test test/ 2>&1 | grep -E "^(not ok|# (tests|pass|fail))" | head
+      -40)
+  ⎿  # tests 47
+     # pass 47
+     # fail 0
+
+● Update(starterpackage\package.json)
+  ⎿  Added 1 line, removed 1 line
+       5    "description": "Starter package for the Benoz.AI take-home ex
+          ercise: field validation library + test suite.",
+       6    "main": "lib/validate.js",
+       7    "scripts": {
+       8 -    "test": "node --test test/validate.test.js"                
+       8 +    "test": "node --test test/"                                
+       9    },
+      10    "engines": {
+      11      "node": ">=18"
+
+● Now the README spec — the part they'll actually write a rule from:
+
+● Write(starterpackage\README.md)
+  ⎿  Added 294 lines, removed 23 lines
+       1  # Starter package — Platform Foundation take-home
+       2  
+       3 -This is the material referenced in Parts 1 and 2 of the exercis
+         -e brief.                                                       
+       4 -                                                               
+       3  ```
+       4  review/
+       5    handover-architecture.md   <- Part 1: the contractor's handov
+          er notes
+       6  lib/
+       9 -  validate.js                <- the validation library (Part 2 
+         -starting point)                                                
+       7 +  validate.js                <- the validation library         
+       8  clients/
+       9    client-a-city-maintenance.json
+      10    client-b-grant-foundation.json
+      11    client-c-clinic.json       <- field definitions for the three
+           live clients
+      12  test/
+      15 -  validate.test.js           <- the existing passing test suite
+      13 +  validate.test.js           <- the original per-field suite (u
+         +nchanged)                                                      
+      14 +  cross-field.test.js        <- tests for the cross-field rules
+         + added here                                                    
+      15 +submission/                  <- the write-ups for Parts 1–4    
+      16 +site/                        <- the React + Tailwind page that 
+         +publishes them                                                 
+      17  package.json
+      18  ```
+      19  
+     ...
+       25  npm test
+       26  ```
+       27  
+       27 -That runs the existing suite (`node --test test/validate.test.
+          -js`). It should pass as-is, out of the box, before you change 
+          -anything.                                                     
+       28 +That runs both suites (`node --test test/`). All 47 tests pass
+          +. The 16 original                                             
+       29 +tests in `test/validate.test.js` are untouched — no existing b
+          +ehavior changed.                                              
+       30  
+       29 -## What's here                                                
+       31 +---                                                           
+       32  
+       31 -`lib/validate.js` exports `validateRecord(definition, record)`
+          -. A **definition** is a list of field descriptions (name, labe
+          -l, type, required, options for choice-like fields, and a `cons
+          -traints` object); a **record** is the plain object of submitte
+          -d values. It returns `{ valid, errors }`, where `errors` is a 
+          -list of `{ field, message }`.                                 
+       33 +# Cross-field validation                                      
+       34  
+       33 -Supported field types today: `text`, `long_text`, `number`, `b
+          -oolean`, `date` (`YYYY-MM-DD`), `choice`, `multi_choice`, `fil
+          -e`. Supported constraints vary by type: `min_length`/`max_leng
+          -th`/`pattern` for text, `min`/`max` for numbers, `min_selected
+          -`/`max_selected` for multi-choice, `accepted` (a list of exten
+          -sions) for files. Look at `clients/*.json` for real examples o
+          -f all of these in use, and `test/validate.test.js` for what ea
+          -ch one rejects.                                               
+       35 +The library validates a **record** against a **definition**. U
+          +ntil now every check                                          
+       36 +looked at one field in isolation, so a rule like *"the project
+          + end date must not be                                         
+       37 +before the project start date"* had nowhere to live except an 
+          +`if` statement in                                             
+       38 +application code.                                             
+       39  
+       35 -The three client definition files are the actual field lists f
+          -or the three clients described in the brief (Client A / City m
+          -aintenance, Client B / Grant-making foundation, Client C / Pri
+          -vate clinic) — field names match what the brief describes. The
+          -y're here so you have real, non-trivial definitions to test ag
+          -ainst rather than inventing your own.                         
+       40 +A definition now has a second, optional top-level key: **`rule
+          +s`**.                                                         
+       41  
+       37 -**What the library does *not* do yet: cross-field validation.*
+          -* Every check today looks at exactly one field in isolation. T
+          -here's no way, today, to express "the project end date must no
+          -t be before the project start date" — that rule spans two fiel
+          -ds, and nothing in the current format has a place to put it.  
+       42 +```json                                                       
+       43 +{                                                             
+       44 +  "fields": [                                                 
+       45 +    { "name": "project_start_date", "label": "Project start da
+          +te", "type": "date", "required": true },                      
+       46 +    { "name": "project_end_date",   "label": "Project end date
+          +",   "type": "date", "required": true }                       
+       47 +  ],                                                          
+       48 +  "rules": [                                                  
+       49 +    {                                                         
+       50 +      "id": "end_date_not_before_start_date",                 
+       51 +      "assert": { "field": "project_end_date", "op": "gte", "o
+          +ther_field": "project_start_date" },                          
+       52 +      "error": {                                              
+       53 +        "field": "project_end_date",                          
+       54 +        "message": "Project end date must not be before the pr
+          +oject start date"                                             
+       55 +      }                                                       
+       56 +    }                                                         
+       57 +  ]                                                           
+       58 +}                                                             
+       59 +```                                                           
+       60  
+       39 -## The task                                                   
+       61 +That is the whole worked example. It is live in               
+       62 +`clients/client-b-grant-foundation.json`.                     
+       63  
+       41 -Add cross-field validation to both the definition format and t
+          -he library, so a rule like the one above can be **declared as 
+          -data**, not written as a one-off `if` statement in application
+          - code.                                                        
+       64 +## Why `rules` sits at the top level                          
+       65  
+       43 -There's no single right answer here — that's deliberate. You'l
+          -l need to decide (and this is the part we actually care about)
+          -:                                                             
+       66 +A cross-field rule does not belong to a field. Hanging it off 
+          +`project_end_date`                                            
+       67 +would imply the error always attaches there, and would hide th
+          +e rule from anyone                                            
+       68 +reading `project_start_date` — the field they are about to cha
+          +nge. One list at the                                          
+       69 +top level is the single place to read all of a client's cross-
+          +field logic.                                                  
+       70  
+       45 -- **How a rule refers to another field.** What does the declar
+          -ation look like? How does it name the field(s) it depends on? 
+       46 -- **Which field the error is reported against.** If `project_e
+          -nd_date` is before `project_start_date`, does the error attach
+          - to the end date, the start date, or both? Pick one and say wh
+          -y.                                                            
+       47 -- **What happens when a dependency is missing.** If a rule nee
+          -ds `project_start_date` and it wasn't submitted (or itself fai
+          -led its own per-field validation), does the cross-field rule s
+          -till run? Silently pass? Silently fail? This should be a delib
+          -erate choice, not whatever happens to fall out of the code.   
+       48 -- **Where you decided to stop.** A single date-comparison rule
+          - is easy to hardcode. A rule engine that can express arbitrary
+          - logic is a project. Somewhere between those is a boundary tha
+          -t covers real cases without turning the definition format into
+          - a programming language — where you draw that line, and why, m
+          -atters more than how much you built.                          
+       71 +## The shape of a rule                                        
+       72  
+       50 -Write all of this up in this README (replace this section, or 
+          -add to it — your call), precisely enough that someone else cou
+          -ld implement a new cross-field rule correctly from your descri
+          -ption alone, without reading your code first.                 
+       73 +| Key | Required | Meaning |                                  
+       74 +|---|---|---|                                                 
+       75 +| `id` | yes | Unique within the definition. Appears on the er
+          +ror, so support can trace a message back to the rule that prod
+          +uced it. |                                                    
+       76 +| `assert` | yes | A **condition**. The record is valid when t
+          +his is true. |                                                
+       77 +| `when` | no | A **condition** guarding the rule. If it is fa
+          +lse, the rule does not apply and nothing is reported. |       
+       78 +| `error.message` | yes | The sentence a person reads. Written
+          + by whoever writes the rule — the library never invents wordin
+          +g. |                                                          
+       79 +| `error.field` | usually no | Which field the error attaches 
+          +to. Defaults to `assert.field`. |                             
+       80  
+       52 -**Constraints on the implementation:**                        
+       81 +Read a rule as a sentence: **when** *guard*, **assert** *condi
+          +tion*, otherwise say                                          
+       82 +*message* against *field*.                                    
+       83  
+       54 -- The existing tests in `test/validate.test.js` must still pas
+          -s. If you change the behavior of an existing test, say why in 
+          -your writeup.                                                 
+       55 -- Add tests for your new behavior, including the awkward cases
+          - above (missing dependency, invalid dependency, etc.) — not ju
+          -st the happy path.                                            
+       56 -- Keep `lib/` client-agnostic: no client names, and no client-
+          -specific field names, anywhere in `lib/`. The three files unde
+          -r `clients/` are examples/fixtures, not part of the library.  
+       84 +## The shape of a condition                                   
+       85  
+       58 -We'll take your documented format and, after you submit, write
+          - a cross-field rule against a client and field set you haven't
+          - seen, following only your README. If we can write that rule c
+          -orrectly from your description, and your code handles it, that
+          -'s the bar.                                                   
+       86 +`when` and `assert` use the same grammar, so there is one thin
+          +g to learn, used in                                           
+       87 +two places. A condition is either a **comparison** or a **comb
+          +inator**.                                                     
+       88 +                                                              
+       89 +### Comparison                                                
+       90 +                                                              
+       91 +```json                                                       
+       92 +{ "field": "<name>", "op": "<operator>", "value": <literal> } 
+       93 +{ "field": "<name>", "op": "<operator>", "other_field": "<name
+          +>" }                                                          
+       94 +{ "field": "<name>", "op": "present" }                        
+       95 +```                                                           
+       96 +                                                              
+       97 +- `field` — the field being checked. Always a field `name`, ne
+          +ver a label.                                                  
+       98 +- `value` — compare against a literal written into the definit
+          +ion.                                                          
+       99 +- `other_field` — compare against another field's submitted va
+          +lue. **This is how a                                          
+      100 +  rule refers to another field.**                             
+      101 +- Comparison operators need **exactly one** of `value` or `oth
+          +er_field`.                                                    
+      102 +  `present`/`absent` take **neither**.                        
+      103 +                                                              
+      104 +### Operators                                                 
+      105 +                                                              
+      106 +| Operator | Works on | Meaning |                             
+      107 +|---|---|---|                                                 
+      108 +| `eq`, `neq` | any scalar | Strict equality / inequality. |  
+      109 +| `lt`, `lte`, `gt`, `gte` | `number`, and `date`/`text`/`long
+          +_text`/`choice` | Ordering. Numbers compare numerically, strin
+          +gs lexicographically. |                                       
+      110 +| `in`, `not_in` | any scalar | Is the value one of a list? `v
+          +alue` is a list literal, or `other_field` is a `multi_choice` 
+          +field. |                                                      
+      111 +| `contains`, `not_contains` | `multi_choice` | Does the selec
+          +ted list include this option? |                               
+      112 +| `present`, `absent` | any | Was the field filled in? Same em
+          +ptiness test as `required`: `null`, `undefined`, `""`, whitesp
+          +ace, and `[]` all count as empty. |                           
+      113 +                                                              
+      114 +`date` fields compare with `lt`/`gte`/etc. because `YYYY-MM-DD
+          +` is zero-padded, so                                          
+      115 +a date sorts identically as text and as a calendar date. No pa
+          +rsing, no timezone,                                           
+      116 +no daylight-saving edge case.                                 
+      117 +                                                              
+      118 +There is no `not`. Every operator has an explicit negation, wh
+          +ich keeps conditions                                          
+      119 +readable as English rather than as nested logic.              
+      120 +                                                              
+      121 +### Combinator                                                
+      122 +                                                              
+      123 +```json                                                       
+      124 +{ "all_of": [ <condition>, <condition>, ... ] }               
+      125 +{ "any_of": [ <condition>, <condition>, ... ] }               
+      126 +```                                                           
+      127 +                                                              
+      128 +Combinators nest. Nesting is allowed because it costs nothing 
+          +to describe or                                                
+      129 +implement; what is *not* allowed is anything that computes a n
+          +ew value (see                                                 
+      130 +[Where I stopped](#where-i-stopped)).                         
+      131 +                                                              
+      132 +## Writing a new rule                                         
+      133 +                                                              
+      134 +1. **State it as a sentence.** "When the priority area include
+          +s health, a clinical                                          
+      135 +   lead is required."                                         
+      136 +2. **The `assert` is the part after the comma** — the thing th
+          +at must be true.                                              
+      137 +   `{ "field": "clinical_lead", "op": "present" }`            
+      138 +3. **The `when` is the part before it**, if there is one.     
+      139 +   `{ "field": "priority_areas", "op": "contains", "value": "h
+          +ealth" }`                                                     
+      140 +4. **Write the message the way you would say it to the person 
+          +filling in the form.**                                        
+      141 +5. **Leave `error.field` out** unless the field to blame is no
+          +t `assert.field`.                                             
+      142 +6. **Run `validateDefinition`** — it will tell you if you mist
+          +yped a field name or                                          
+      143 +   compared two things that cannot be compared.               
+      144 +                                                              
+      145 +```json                                                       
+      146 +{                                                             
+      147 +  "id": "health_needs_a_clinical_lead",                       
+      148 +  "when":   { "field": "priority_areas", "op": "contains", "va
+          +lue": "health" },                                             
+      149 +  "assert": { "field": "clinical_lead",  "op": "present" },   
+      150 +  "error":  { "message": "Name a clinical lead when health is 
+          +a priority area" }                                            
+      151 +}                                                             
+      152 +```                                                           
+      153 +                                                              
+      154 +Two more shapes worth having seen:                            
+      155 +                                                              
+      156 +```json                                                       
+      157 +// At least one of two fields. A combinator has no subject, so
+          + error.field is required.                                     
+      158 +{                                                             
+      159 +  "id": "one_contact_method",                                 
+      160 +  "assert": { "any_of": [                                     
+      161 +    { "field": "phone", "op": "present" },                    
+      162 +    { "field": "email", "op": "present" }                     
+      163 +  ]},                                                         
+      164 +  "error": { "field": "phone", "message": "Give either a phone
+          + number or an email address" }                                
+      165 +}                                                             
+      166 +                                                              
+      167 +// A guard on a combination, and an error deliberately aimed e
+          +lsewhere.                                                     
+      168 +{                                                             
+      169 +  "id": "justify_large_expedited_request",                    
+      170 +  "when": { "all_of": [                                       
+      171 +    { "field": "expedited", "op": "eq",  "value": true },     
+      172 +    { "field": "amount",    "op": "gt",  "other_field": "ceili
+          +ng" }                                                         
+      173 +  ]},                                                         
+      174 +  "assert": { "field": "justification", "op": "present" },    
+      175 +  "error":  { "message": "Justify an expedited request above t
+          +he ceiling" }                                                 
+      176 +}                                                             
+      177 +```                                                           
+      178 +                                                              
+      179 +---                                                           
+      180 +                                                              
+      181 +## The three decisions the task asks about                    
+      182 +                                                              
+      183 +### 1. Which field the error is reported against              
+      184 +                                                              
+      185 +**The subject of the `assert` — the field named in `assert.fie
+          +ld` — unless                                                  
+      186 +`error.field` overrides it.**                                 
+      187 +                                                              
+      188 +If `project_end_date` must be `gte` `project_start_date`, the 
+          +error goes on                                                 
+      189 +`project_end_date`. The rule is grammatically *about* the end 
+          +date; the start date                                          
+      190 +appears as the thing it is measured against. That matches what
+          + the person filling                                           
+      191 +in the form has to do: one field is highlighted, and it is the
+          + one to change.                                               
+      192 +                                                              
+      193 +The override exists because the grammar cannot always guess. I
+          +f the form asks for                                           
+      194 +the end date first, blaming the start date may be the kinder c
+          +hoice, and                                                    
+      195 +`"error": { "field": "project_start_date", ... }` says so.    
+      196 +                                                              
+      197 +**One rule produces at most one error, and it never attaches t
+          +o two fields.**                                               
+      198 +Highlighting both ends of a comparison tells the user there ar
+          +e two problems when                                           
+      199 +there is one, and leaves them unsure which to edit. If a clien
+          +t genuinely wants                                             
+      200 +both highlighted, that is two rules with two messages — which 
+          +forces the author to                                          
+      201 +write two sentences that each make sense on their own, and usu
+          +ally reveals that                                             
+      202 +only one of them did.                                         
+      203 +                                                              
+      204 +### 2. What happens when a dependency is missing or invalid   
+      205 +                                                              
+      206 +**A rule runs only if every field it reads is *usable*. Otherw
+          +ise it is skipped,                                            
+      207 +silently.** A field is usable when both hold:                 
+      208 +                                                              
+      209 +- it is **present** (unless it is only being tested with `pres
+          +ent`/`absent`), and                                           
+      210 +- it produced **no per-field error** in phase 1.              
+      211 +                                                              
+      212 +The consequences, spelled out:                                
+      213 +                                                              
+      214 +| Situation | What happens |                                  
+      215 +|---|---|                                                     
+      216 +| Dependency missing, and `required` | Phase 1 already emitted
+          + "X is required". The rule is skipped. One error, on the empty
+          + field. |                                                     
+      217 +| Dependency missing, and optional | The rule is skipped. Noth
+          +ing is reported. |                                            
+      218 +| Dependency present but malformed (e.g. a date as `15/01/2027
+          +`) | Phase 1 emitted a format error. The rule is skipped. |   
+      219 +| The rule's own `assert.field` is missing | Skipped — **excep
+          +t** under `present`/`absent`, which are *about* emptiness and 
+          +therefore always run. |                                       
+      220 +| `when` guard is false, or cannot be evaluated | The rule doe
+          +s not apply. Nothing reported. |                              
+      221 +                                                              
+      222 +**Why skip rather than fail.** A rule states a relationship be
+          +tween values. If a                                            
+      223 +value is absent or known to be malformed, the relationship has
+          + no truth value —                                             
+      224 +`"15/01/2027" >= "2027-12-15"` is not false, it is meaningless
+          +. Reporting a failure                                         
+      225 +would put a second, derived error on a field the user cannot f
+          +ix, and would blame                                           
+      226 +the wrong one: they must fix the malformed start date, and bei
+          +ng told the end date                                          
+      227 +is also wrong sends them to edit a field that is fine.        
+      228 +                                                              
+      229 +Failing would also quietly change what `required` means. For t
+          +wo optional dates, a                                          
+      230 +cross-field rule that fired on absence would make filling in o
+          +ne of them compulsory                                         
+      231 +— a requirement the definition never declared and nobody could
+          + see.                                                         
+      232 +                                                              
+      233 +**Why silently.** The user is not owed a message about a check
+          + that did not run;                                            
+      234 +they already have a message about the field that stopped it. S
+          +ilence here is only                                           
+      235 +safe because the *unsafe* silences are excluded: a malformed r
+          +ule, an unknown                                               
+      236 +operator, or two operands that cannot be compared are all repo
+          +rted loudly rather                                            
+      237 +than skipped, because a rule that always passes is worse than 
+          +no rule at all.                                               
+      238 +                                                              
+      239 +**A corollary worth relying on: rules are order-independent.**
+          + They read phase 1's                                          
+      240 +results and the record, never each other's outcomes. Reorderin
+          +g the `rules` array                                           
+      241 +cannot change the result, and every rule that can run does — t
+          +he phase does not                                             
+      242 +stop at the first failure, so a user sees all their problems a
+          +t once.                                                       
+      243 +                                                              
+      244 +### 3. Where I stopped                                        
+      245 +                                                              
+      246 +**The line: a rule can *read and compare* submitted values. It
+          + can never *compute*                                          
+      247 +a new one.**                                                  
+      248 +                                                              
+      249 +Inside the line — comparison between two fields, comparison ag
+          +ainst a literal,                                              
+      250 +membership, presence, and boolean combinations of those. That 
+          +covers the cases                                              
+      251 +these three clients and their briefs actually produce: date or
+          +dering, numeric                                               
+      252 +ranges (`min`/`max` as two fields), required-if-another-field-
+          +equals, required-if-a                                         
+      253 +multi-choice-includes, and at-least-one-of.                   
+      254 +                                                              
+      255 +Outside the line, deliberately:                               
+      256 +                                                              
+      257 +- **Arithmetic.** No "these three fields must sum to the total
+          +", no "end date must                                          
+      258 +  be within 90 days of start". Both need an expression evaluat
+          +or, and the moment a                                          
+      259 +  definition contains an expression, the definition is a progr
+          +am: it needs a                                                
+      260 +  parser, a precedence table, its own error messages, and a se
+          +curity review of                                              
+      261 +  what a client-authored expression may reach.                
+      262 +- **`not`.** Every operator has a negation, so a general `not`
+          + adds nesting and no                                          
+      263 +  expressive power.                                           
+      264 +- **Cross-record and cross-table lookups.** "This licence numb
+          +er must exist in the                                          
+      265 +  registry" is a different kind of check — it needs I/O, it ca
+          +n fail for reasons                                            
+      266 +  that are not the user's fault, and it cannot be answered syn
+          +chronously from the                                           
+      267 +  record in hand.                                             
+      268 +- **Rules depending on other rules' outcomes.** That introduce
+          +s ordering, and with                                          
+      269 +  it cycles.                                                  
+      270 +                                                              
+      271 +**The test for the boundary:** every rule in this format can b
+          +e read aloud as one                                           
+      272 +English sentence by someone who has never seen the format. `wh
+          +en priority_areas                                             
+      273 +contains health, clinical_lead must be present` passes. `when 
+          +(amount * 1.15) >                                             
+      274 +(ceiling - reserve)` does not. When a client needs the second 
+          +kind, the honest                                              
+      275 +answer is a named validator in code that the definition invoke
+          +s by name — a small,                                          
+      276 +reviewed, testable extension point — not a slightly bigger exp
+          +ression language                                              
+      277 +that will need extending again next month.                    
+      278 +                                                              
+      279 +**What I would add first if pushed**, in order: a `date_within
+          +` style operator with                                         
+      280 +an explicit unit (the most-requested rule this format can't ex
+          +press), then named                                            
+      281 +validators as the escape hatch. Both are additive; neither cha
+          +nges anything above.                                          
+      282 +                                                              
+      283 +---                                                           
+      284 +                                                              
+      285 +## Definitions are data, so this is the compiler              
+      286 +                                                              
+      287 +Rules ship as JSON. JSON has no compiler, so a mistyped field 
+          +name would otherwise                                          
+      288 +surface as a rule that silently never fires. `validateDefiniti
+          +on(definition)`                                               
+      289 +closes that gap and should run wherever a definition is author
+          +ed or loaded:                                                 
+      290 +                                                              
+      291 +```js                                                         
+      292 +const { validateDefinition } = require("./lib/validate");     
+      293 +                                                              
+      294 +const result = validateDefinition(definition);                
+      295 +// { valid: false, errors: [{ rule: "typo", message: '`assert`
+          + references unknown field "start_on"' }] }                    
+      296 +```                                                           
+      297 +                                                              
+      298 +It catches unknown field names, unknown operators, duplicate r
+          +ule ids, a missing                                            
+      299 +`error.message`, giving both `value` and `other_field` (or nei
+          +ther), giving an                                              
+      300 +operand to `present`/`absent`, a combinator `assert` with no `
+          +error.field`,                                                 
+      301 +`contains` on a field that is not a `multi_choice`, and orderi
+          +ng comparisons                                                
+      302 +between types that cannot be ordered — `date` against `number`
+          +, for instance.                                               
+      303 +                                                              
+      304 +## API                                                        
+      305 +                                                              
+      306 +```js                                                         
+      307 +const { validateRecord, validateDefinition } = require("./lib/
+          +validate");                                                   
+      308 +                                                              
+      309 +validateRecord(definition, record);                           
+      310 +// -> { valid: boolean, errors: [{ field, message, rule? }] } 
+      311 +```                                                           
+      312 +                                                              
+      313 +`errors` is unchanged in shape. Errors from cross-field rules 
+          +carry an extra                                                
+      314 +`rule` key naming the rule that produced them; per-field error
+          +s do not. Existing                                            
+      315 +callers that read `field` and `message` are unaffected, and a 
+          +definition with no                                            
+      316 +`rules` key behaves exactly as it did before.                 
+      317 +                                                              
+      318 +## Constraints the task set, and how they are met             
+      319 +                                                              
+      320 +- **Existing tests pass unchanged.** All 16, with no edits to 
+      321 +  `test/validate.test.js` and no behavior change to any existi
+          +ng path.                                                      
+      322 +- **New tests cover the awkward cases**, not just the happy pa
+          +th: missing required                                          
+      323 +  dependency, missing optional dependency, malformed dependenc
+          +y, malformed subject,                                         
+      324 +  guard that cannot be evaluated, unknown operator, rule with 
+          +nowhere to report,                                            
+      325 +  order-independence, and every `validateDefinition` failure a
+          +bove.                                                         
+      326 +  See `test/cross-field.test.js`.                             
+      327 +- **`lib/` stays client-agnostic.** No client names and no cli
+          +ent-specific field                                            
+      328 +  names anywhere in `lib/validate.js`. The one worked rule liv
+          +es in                                                         
+      329 +  `clients/client-b-grant-foundation.json`, where the other cl
+          +ient-specific data is.                                        
+
+● Bash(npm test 2>&1 | grep -E "^# (tests|pass|fail)" && node -e "
+      const {validateDefinition, validateRecord} = require('./lib/validate');…)
+  ⎿  # tests 47
+     # pass 47
+     # fail 0
+     … +14 lines (ctrl+o to expand)
+
+● Write(starterpackage\submission\part2-code.md)
+  ⎿  Added 91 lines, removed 16 lines
+        1  # Part 2 — The code
+        2  
+        3 -> **TODO** — replace the placeholders below before publishing.
+        3 +**Repository: <https://github.com/YOUR-USERNAME/YOUR-REPO>** ←
+          + *replace before sending*                                     
+        4  
+        5 -## Repository                                                 
+        5 +Cross-field validation, added to both the definition format an
+          +d the library, so a                                           
+        6 +rule like *"the project end date must not be before the projec
+          +t start date"* is                                             
+        7 +**declared as data** rather than written as an `if` statement 
+          +in application code.                                          
+        8  
+        7 -**<https://github.com/YOUR-USERNAME/YOUR-REPO>**              
+        9 +The full format specification is in [`README.md`](https://gith
+          +ub.com/YOUR-USERNAME/YOUR-REPO/blob/main/starterpackage/README
+          +.md) —                                                        
+       10 +precise enough to write a new rule from without reading the co
+          +de. What follows is                                           
+       11 +the short version.                                            
+       12  
+        9 -The cross-field validation work lives in `lib/validate.js`, wi
+          -th the format documented in                                   
+       10 -`README.md` and tests in `test/validate.test.js`.             
+       11 -                                                              
+       13  ```
+       13 -lib/validate.js      the validation library, including cross-f
+          -ield rules                                                    
+       14 -clients/*.json       the three client field definitions       
+       15 -test/validate.test.js  existing suite + new cross-field tests 
+       16 -README.md            the format writeup — how to declare a new
+          - rule                                                         
+       14 +lib/validate.js            validateRecord + validateDefinition
+       15 +clients/*.json             the three client definitions; clien
+          +t B carries the worked rule                                   
+       16 +test/validate.test.js      the original 16 tests — untouched, 
+          +still passing                                                 
+       17 +test/cross-field.test.js   31 new tests for the rules and thei
+          +r edge cases                                                  
+       18 +README.md                  the format spec                    
+       19  ```
+       20  
+       19 -## Running it                                                 
+       21 +```bash                                                       
+       22 +npm test    # 47 tests, no dependencies, Node 18+             
+       23 +```                                                           
+       24  
+       21 -Node 18+, no dependencies.                                    
+       25 +## The format                                                 
+       26  
+       23 -```bash                                                       
+       24 -npm test                                                      
+       27 +A definition gains one optional top-level key, `rules`, alongs
+          +ide `fields`:                                                 
+       28 +                                                              
+       29 +```json                                                       
+       30 +{                                                             
+       31 +  "id": "end_date_not_before_start_date",                     
+       32 +  "assert": { "field": "project_end_date", "op": "gte", "other
+          +_field": "project_start_date" },                              
+       33 +  "error": {                                                  
+       34 +    "field": "project_end_date",                              
+       35 +    "message": "Project end date must not be before the projec
+          +t start date"                                                 
+       36 +  }                                                           
+       37 +}                                                             
+       38  ```
+       39  
+       27 -## What changed                                               
+       40 +Read as a sentence: **when** *(optional guard)*, **assert** *t
+          +his condition*,                                               
+       41 +otherwise report *this message* against *this field*.         
+       42  
+       29 -- **TODO** — one line per meaningful change, so a reader knows
+          - what to look at first.                                       
+       43 +A rule refers to another field with **`other_field`**, naming 
+          +it exactly as `fields`                                        
+       44 +does. `when` and `assert` share one condition grammar — compar
+          +ison                                                          
+       45 +(`eq`/`neq`/`lt`/`lte`/`gt`/`gte`/`in`/`not_in`/`contains`/`no
+          +t_contains`/`present`/`absent`)                               
+       46 +against either a literal `value` or an `other_field` — plus `a
+          +ll_of`/`any_of` to                                            
+       47 +combine them. One grammar, two slots, nothing else to learn.  
+       48 +                                                              
+       49 +Rules live at the **top level**, not on a field, because a cro
+          +ss-field rule is not                                          
+       50 +owned by either field it touches. Hanging it off `project_end_
+          +date` would hide it                                           
+       51 +from whoever is reading `project_start_date` — the field they 
+          +are about to change.                                          
+       52 +                                                              
+       53 +## The three judgment calls                                   
+       54 +                                                              
+       55 +**Which field gets the error.** The subject of the `assert` — 
+          +the field the rule is                                         
+       56 +grammatically *about*, and the one the user has to change. `er
+          +ror.field` overrides                                          
+       57 +it when the form's ordering makes the other field the kinder p
+          +lace to complain.                                             
+       58 +One rule produces at most one error, never two: highlighting b
+          +oth ends of a                                                 
+       59 +comparison tells the user there are two problems when there is
+          + one.                                                         
+       60 +                                                              
+       61 +**When a dependency is missing or invalid.** A rule runs only 
+          +if every field it                                             
+       62 +reads is *usable* — present, and free of per-field errors. Oth
+          +erwise it is skipped,                                         
+       63 +silently. A relationship between values has no truth value whe
+          +n one value is absent                                         
+       64 +or malformed; `"15/01/2027" >= "2027-12-15"` is not false, it 
+          +is meaningless.                                               
+       65 +Reporting it would put a second error on a field the user cann
+          +ot fix and send them                                          
+       66 +to edit the wrong one. `present`/`absent` are the carve-out — 
+          +they are *about*                                              
+       67 +emptiness, which is what makes "required if" expressible.     
+       68 +                                                              
+       69 +The silence is bounded. A malformed rule, an unknown operator,
+          + or two operands that                                         
+       70 +cannot be compared are all reported **loudly**, because a rule
+          + that always passes is                                        
+       71 +worse than no rule at all.                                    
+       72 +                                                              
+       73 +**Where I stopped.** A rule can *read and compare* submitted v
+          +alues. It can never                                           
+       74 +*compute* a new one. No arithmetic, no "within 90 days", no cr
+          +oss-record lookups,                                           
+       75 +no rules that depend on other rules. The test: every rule in t
+          +his format reads                                              
+       76 +aloud as one English sentence. `when priority_areas contains h
+          +ealth, clinical_lead                                          
+       77 +must be present` passes; `when (amount * 1.15) > (ceiling - re
+          +serve)` does not —                                            
+       78 +that is an expression evaluator, and a definition containing a
+          +n expression is a                                             
+       79 +program. When a client needs that, the honest answer is a name
+          +d validator in code                                           
+       80 +invoked by name from the definition, not a slightly larger exp
+          +ression language that                                         
+       81 +needs extending again next month.                             
+       82 +                                                              
+       83 +## Two things I added that weren't asked for                  
+       84 +                                                              
+       85 +**`validateDefinition(definition)`.** Rules ship as JSON, and 
+          +JSON has no compiler —                                        
+       86 +so a mistyped field name would otherwise surface as a rule tha
+          +t silently never                                              
+       87 +fires, which is the exact failure mode this whole design is tr
+          +ying to avoid. It                                             
+       88 +catches unknown field references, unknown operators, duplicate
+          + ids, missing                                                 
+       89 +messages, malformed operands, and ordering comparisons between
+          + incomparable types                                           
+       90 +(`date` against `number`). Run it where definitions are author
+          +ed, so the typo is                                            
+       91 +caught by the person writing the rule rather than the person f
+          +illing in the form.                                           
+       92 +                                                              
+       93 +**Order-independence as a guarantee.** Rules read phase 1's re
+          +sults and the record,                                         
+       94 +never each other's outcomes. Reordering the `rules` array cann
+          +ot change the result,                                         
+       95 +and every rule that can run does — so the user sees all their 
+          +problems at once                                              
+       96 +rather than one per submit. There is a test asserting it.     
+       97 +                                                              
+       98 +## Compatibility                                              
+       99 +                                                              
+      100 +No existing behavior changed. All 16 original tests pass with 
+          +`test/validate.test.js`                                       
+      101 +unedited. `errors` keeps its `{ field, message }` shape; rule 
+          +errors carry an extra                                         
+      102 +`rule` key naming what produced them, which existing callers i
+          +gnore. A definition                                           
+      103 +with no `rules` key behaves exactly as before. `lib/` remains 
+          +client-agnostic — no                                          
+      104 +client names, no client-specific field names.                 
+
+● Bash(cd site && npm run build 2>&1 | tail -8)
+  ⎿      at _rmdirSync (node:internal/fs/rimraf:262:21)
+         at rimrafSync (node:internal/fs/rimraf:195:7)
+         at Object.rmSync (node:fs:1264:10)
+     … +13 lines (ctrl+o to expand)
+
+● Bash(rm -rf dist 2>/dev/null; ls -d dist 2>/dev/null || echo "dist gone"; npm
+      run build 2>&1 | tail -8)
+  ⎿  dist
+         at node:internal/fs/rimraf:255:9
+         at Array.forEach (<anonymous>)
+     … +10 lines (ctrl+o to expand)
+
+● PowerShell(Get-NetTCPConnection -LocalPort 4173 -State Listen -ErrorAction
+            SilentlyContinue | ForEach-Object { Get-Process -Id $_.OwningProcess
+            } | Select-Object Id, Proce…)
+  ⎿     Id ProcessName
+        -- -----------
+     36488 node
+
+● PowerShell(Stop-Process -Id 36488 -Force; Start-Sleep -Milliseconds 500;
+            Write-Output "stopped")
+  ⎿  stopped
+
+● Bash(rm -rf dist && npm run build 2>&1 | tail -8)
+  ⎿  transforming...
+     ✓ 294 modules transformed.
+     rendering chunks...
+     … +5 lines (ctrl+o to expand)
+
+● Bash(grep -c "declared as data" dist/assets/*.js && cd .. && npm test 2>&1 |
+      grep -E "^# (tests|pass|fail)")  ⎿  1
+     # tests 47
+     # pass 47
+     # fail 0
+
+● Part 2 is implemented, tested, documented, and now renders on the page.
+
+  The format
+
+  One optional top-level key, rules, sibling of fields. The worked example is
+  live in clients/client-b-grant-foundation.json:
+
+  {
+    "id": "end_date_not_before_start_date",
+    "assert": { "field": "project_end_date", "op": "gte", "other_field":
+  "project_start_date" },
+    "error": { "field": "project_end_date",
+               "message": "Project end date must not be before the project start
+  date" }
+  }
+
+  A rule reads as a sentence: when (optional guard), assert this, otherwise
+  report this message against this field. when and assert share one condition
+  grammar — field + op + either a literal value or an other_field (that's how a
+  rule names its dependency), plus all_of/any_of to combine. Twelve operators,
+  covering ordering, membership, multi-choice containment and presence.
+
+  Rules sit at the top level rather than on a field, because hanging one off
+  project_end_date hides it from whoever is reading project_start_date — the
+  field they're about to change.
+
+  The three judgment calls
+
+  Error target: the subject of the assert, overridable via error.field. One rule
+  → at most one error, never two; highlighting both ends of a comparison claims
+  two problems where there's one.
+
+  Missing/invalid dependency: the rule runs only if every field it reads is
+  usable — present, and free of phase-1 errors. Otherwise skipped silently,
+  because "15/01/2027" >= "2027-12-15" isn't false, it's meaningless, and
+  reporting it sends the user to fix the wrong field. present/absent are the
+  carve-out that makes "required if" expressible. The silence is bounded:
+  malformed rules, unknown operators, and incomparable operands are all reported
+  loudly — a rule that always passes is worse than no rule.
+
+  Where I stopped: a rule can read and compare values, never compute one. No
+  arithmetic, no "within 90 days", no cross-record lookups, no
+  rule-depends-on-rule. The test is that every rule reads aloud as one English
+  sentence.
+
+  Two additions beyond the ask
+
+  - validateDefinition(definition) — rules ship as JSON and JSON has no
+    compiler, so a mistyped field name would otherwise become a rule that
+    silently never fires. It catches unknown fields/operators, duplicate ids,
+    missing messages, malformed operands, and date-against-number comparisons.
+  - Order-independence as a guarantee, with a test asserting it. Rules read
+    phase 1 and the record, never each other, so reordering the array can't
+    change the result and the user sees all problems at once.
+
+  Verification
+
+  npm test → 47 passing, 0 failing. The original 16 in test/validate.test.js are
+  byte-for-byte unedited; 31 new ones in test/cross-field.test.js cover
+  missing-required dependency, missing-optional dependency, malformed
+  dependency, malformed subject, unevaluable guard, unknown operator, a rule
+  with nowhere to report, order-independence, and every validateDefinition
+  failure. lib/ has no client names or client-specific field names.
+
+  The spec lives in starterpackage/README.md — written so someone can implement
+  a new rule from it without reading the code, which is the stated bar. Part 2
+  on the site now carries the summary; submission/part2-code.md still has a
+  YOUR-USERNAME/YOUR-REPO placeholder in two spots to replace once you push.
+
+✻ Crunched for 10m 15s
+
+※ recap: Goal is a single hosted page for the Benoz take-home; the React/Tailwind site is built and Part 2 (cross-field validation) is implemented with 47 tests passing. Next: replace the YOUR-USERNAME/YOUR-REPO placeholders in part2-code.md, then write Parts 3 and 4. (disable recaps in /config)

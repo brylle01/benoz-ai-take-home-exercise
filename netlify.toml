@@ -1,0 +1,5 @@
+# Deploy from the repo root with: netlify deploy --prod
+[build]
+  base    = "starterpackage/site"
+  command = "npm run build"
+  publish = "starterpackage/site/dist"
